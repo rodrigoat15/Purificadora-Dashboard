@@ -393,7 +393,8 @@ function drawChart(sel){
 /* ===== Mes actual (solo libreta) ===== */
 function renderActual(){
   const m = DATA.actual, anio = DATA.anio, key = `${anio}-${String(m+1).padStart(2,"0")}`;
-  const dd = DATA.diario.filter(x=>x.fecha.slice(0,7)===key);
+  const dm = DATA.diario.filter(x=>x.fecha.slice(0,7)===key);   // incluye días no laborados (solo para la tabla)
+  const dd = dm.filter(x=>!x.no_laborado);
   const box = $("actual");
   const head = `<div class="sec-head"><div class="per">Mes actual · solo notas de la libreta</div></div>`;
   if(!dd.length){
@@ -426,7 +427,8 @@ function renderActual(){
         <div><span>Ventanilla</span><b>${money(S("ventanilla_importe"))}</b><small>${int(S("ventanilla_garrafones"))} garrafones</small></div>
         <div><span>Ruta en efectivo</span><b>${money(S("ruta_efectivo"))}</b><small>${int(S("ruta_garrafones"))} garrafones entregados</small></div>
         <div><span>Gastos anotados</span><b>${money(gT)}</b><small>pagados de caja</small></div>
-        <div><span>Caja al cierre</span><b>${money(last.caja_total)}</b><small>${fd(last.fecha)}</small></div>
+        <div><span>Caja al cierre</span><b>${money(last.caja_total-(last.corte||0))}</b><small>${fd(last.fecha)}${last.corte?` · después del corte`:""}</small></div>
+        <div><span>Cortes de caja</span><b>${money(S("corte"))}</b><small>retirado por el dueño</small></div>
       </div>
     </section>
     <section class="panel">
@@ -439,8 +441,10 @@ function renderActual(){
         ${gn.length ? hbars(gn.map(x=>({k:nice(x.k),v:x.v})), gT, "var(--out)", x=>`${money(x.v)} · ${pct(x.v/gT)}`) : `<p class="empty">Sin gastos anotados.</p>`}
       </section>
       <section class="panel"><h2>Día por día</h2><p class="lead">Del más reciente al más antiguo.</p>
-        <div class="tscroll"><table class="t"><thead><tr><th>Día</th><th>Ventanilla</th><th>Ruta</th><th>Gastos</th><th>Caja</th><th>Cuadre</th></tr></thead><tbody>
-        ${dd.slice().reverse().map(x=>`<tr><td>${fd(x.fecha)}</td><td>${money(x.ventanilla_importe)}<br><small class="mut">${x.ventanilla_garrafones} gf</small></td><td>${money(x.ruta_efectivo)}<br><small class="mut">${x.ruta_garrafones} gf</small></td><td>${money(x.gastos)}</td><td>${money(x.caja_total)}</td><td class="${x.cuadra?"pos":"neg"}">${x.cuadra?"Cuadra":"No cuadra"}</td></tr>`).join("")}
+        <div class="tscroll"><table class="t"><thead><tr><th>Día</th><th>Ventanilla</th><th>Ruta</th><th>Gastos</th><th>Caja</th><th>Corte de caja</th><th>Cuadre</th></tr></thead><tbody>
+        ${dm.slice().reverse().map(x=> x.no_laborado
+          ? `<tr><td>${fd(x.fecha)}</td><td colspan="6" class="mut">${esc(x.nota||"No se trabajó")}</td></tr>`
+          : `<tr><td>${fd(x.fecha)}</td><td>${money(x.ventanilla_importe)}<br><small class="mut">${x.ventanilla_garrafones} gf</small></td><td>${money(x.ruta_efectivo)}<br><small class="mut">${x.ruta_garrafones} gf</small></td><td>${money(x.gastos)}</td><td>${money(x.caja_total)}</td><td>${x.corte?money(x.corte):"—"}</td><td class="${x.cuadra?"pos":"neg"}" ${x.nota?`title="${esc(x.nota)}"`:""}>${x.cuadra?"Cuadra":"No cuadra"}${x.nota?`<br><small class="mut">${esc(x.nota)}</small>`:""}</td></tr>`).join("")}
         </tbody></table></div>
       </section>
     </div>`;
