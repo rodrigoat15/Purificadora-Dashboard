@@ -120,7 +120,7 @@ footer{margin-top:28px;font-size:.8rem;color:var(--muted)}
 <div class="wrap">
   <header>
     <div class="brand" id="brand">Agua Inmaculada Chapultepec<small>Resultados del negocio</small></div>
-    <nav aria-label="Secciones"><a href="#resultados">Resultados</a><a href="#actual">Mes actual</a></nav>
+    <nav aria-label="Secciones"><a href="#resultados">Resultados</a><a href="#inventario">Inventario</a><a href="#actual">Mes actual</a></nav>
     <div class="status" id="status"><span class="dot"></span><span>Cargando…</span></div>
   </header>
 
@@ -151,6 +151,9 @@ footer{margin-top:28px;font-size:.8rem;color:var(--muted)}
     <section class="panel" id="clientes"></section>
     <section class="panel" id="caja"></section>
   </div>
+
+  <!-- ============ DATOS GENERALES: INVENTARIO (pestaña INVENTARIO) ============ -->
+  <section class="panel" id="inventario"></section>
 
   <!-- ============ MES ACTUAL (solo libreta) ============ -->
   <div class="band" id="actual"></div>
@@ -204,22 +207,36 @@ let DATA=null, SEL=null, SOURCE="snap";
 function norm(d){
   d = JSON.parse(JSON.stringify(d));
   const ing=d.ingresos||{}, gas=d.gastos||{};
+  const anio = d.anio || 2026, hoy = new Date();
+  const mesHoy = hoy.getFullYear()===anio ? hoy.getMonth() : hoy.getFullYear()>anio ? 12 : -1;
   const parts = (o,i) => sum(Object.entries(o).filter(([k])=>k!=="TOTAL").map(([,v])=>v[i]));
+  const cerradoEdr = MESES.map((_,i)=>((ing.TOTAL||[])[i]||parts(ing,i)||0)!==0 || ((gas.TOTAL||[])[i]||parts(gas,i)||0)!==0);
+  // Mes ya terminado que aún no se cierra en EDO RESULTADOS: se arma con las pestañas mensuales (preliminar)
+  const pg = (d.detalle||{}).pagos || {ingresos:{}, gastos:{}};
+  const prelim = MESES.map((_,i)=>!cerradoEdr[i] && i<mesHoy &&
+    (sum(Object.values(pg.ingresos).map(a=>a[i]))!==0 || sum(Object.values(pg.gastos).map(a=>a[i]))!==0));
+  const sa = s => String(s).normalize("NFD").replace(/\p{M}/gu,"").toUpperCase();   // "CRÉDITO" = "CREDITO"
+  const llave = (o,p) => Object.keys(o).find(k=>k!=="TOTAL" && (sa(k)===sa(p) || sa(k).startsWith(sa(p)) || sa(p).startsWith(sa(k)))) || p;
+  [[ing,pg.ingresos],[gas,pg.gastos]].forEach(([o,src])=>prelim.forEach((on,i)=>{ if(!on) return;
+    Object.entries(src).forEach(([p,a])=>{ if(!a[i]) return; const k=llave(o,p);
+      o[k]=o[k]||MESES.map(()=>0); o[k][i]=(o[k][i]||0)+a[i]; });
+    if(o.TOTAL) o.TOTAL[i]=parts(o,i); }));
   const tI = ing.TOTAL || MESES.map((_,i)=>parts(ing,i));
   const tG = gas.TOTAL || MESES.map((_,i)=>parts(gas,i));
   const util = MESES.map((_,i)=>(tI[i]||0)-(tG[i]||0));
-  const cerrado = MESES.map((_,i)=>(tI[i]||0)!==0 || (tG[i]||0)!==0);
+  const cerrado = MESES.map((_,i)=>cerradoEdr[i] || prelim[i]);
   const chk = {};
   ["ingresos","gastos"].forEach(sec=>{ const o=d[sec]||{}, t=sec==="ingresos"?tI:tG;
     chk[sec] = MESES.map((_,i)=>{ const p=parts(o,i); return Math.abs(p-(t[i]||0))>1 ? {parts:p,total:t[i]} : null; }); });
   const ultimo = cerrado.lastIndexOf(true);
   const diario = (d.diario||[]).slice().sort((a,b)=>a.fecha.localeCompare(b.fecha));
-  const anio = d.anio || 2026;
-  // Mes actual: el más reciente entre (último cerrado + 1) y la última nota cargada
+  // Mes actual: el mes del calendario (el 1 de octubre pasa solo a octubre y septiembre queda en el histórico).
+  // Fuera del año del Sheet: el más reciente entre (último cerrado + 1) y la última nota cargada.
   const ultNota = diario.length ? diario[diario.length-1].fecha : null;
-  let actual = Math.min(11, ultimo+1), anioActual = anio;
+  let actual = Math.min(11, ultimo+1);
   if (ultNota && Number(ultNota.slice(0,4))===anio) actual = Math.max(actual, Number(ultNota.slice(5,7))-1);
-  return {...d, anio, diario, tI, tG, util, cerrado, chk, ultimo, actual,
+  if (mesHoy>=0 && mesHoy<=11) actual = mesHoy;
+  return {...d, anio, diario, tI, tG, util, cerrado, prelim, chk, ultimo, actual, inventario: d.inventario || null,
     ingK:Object.keys(ing).filter(k=>k!=="TOTAL"), gasK:Object.keys(gas).filter(k=>k!=="TOTAL"),
     detalle: d.detalle || {gastos:{},clientes:{}}, gastos_notas: d.gastos_notas || {}};
 }
@@ -232,10 +249,12 @@ function buildSelect(){
   const s=$("periodo"), prev=SEL;
   const u=DATA.ultimo;
   s.innerHTML = `<option value="ytd">${u>=0?`Enero – ${cap(MESES[u])}`:"Acumulado"} ${DATA.anio}</option>` +
-    MESES.map((m,i)=>DATA.cerrado[i]?`<option value="${i}">${cap(m)}</option>`:"").join("");
+    MESES.map((m,i)=>DATA.cerrado[i]?`<option value="${i}">${cap(m)}${DATA.prelim[i]?" (preliminar)":""}</option>`:"").join("");
   s.value = [...s.options].some(o=>o.value===prev) ? prev : "ytd";
   SEL = s.value;
-  $("rango").innerHTML = u>=0 ? `Meses cerrados: <b>enero a ${MESES[u]} ${DATA.anio}</b>` : "Aún no hay meses cerrados";
+  const pre = MESES.filter((_,i)=>DATA.prelim[i]), uE = DATA.cerrado.map((c,i)=>c&&!DATA.prelim[i]).lastIndexOf(true);
+  $("rango").innerHTML = (uE>=0 ? `Meses cerrados: <b>enero a ${MESES[uE]} ${DATA.anio}</b>` : "Aún no hay meses cerrados") +
+    (pre.length ? ` · <span class="mut">${pre.join(", ")} preliminar</span>` : "");
 }
 
 /* ===== Resultados ===== */
@@ -276,6 +295,8 @@ function renderResultados(){
   $("er").innerHTML = t;
 
   const warns=[];
+  const pre = ms.filter(k=>DATA.prelim[k]);
+  if (pre.length) warns.push(`<strong>${pre.map(k=>cap(MESES[k])).join(", ")}: preliminar.</strong> Todavía no se cierra en EDO RESULTADOS; las cifras salen de las pestañas INGRESOS y GASTOS del mes (efectivo de la libreta más lo capturado a mano). Revisa que estén todas las transferencias y pagos con tarjeta; al cerrarlo en EDO RESULTADOS se usan esas cifras.`);
   ["ingresos","gastos"].forEach(sec=>ms.forEach(k=>{ const w=DATA.chk[sec][k]; if(w)
     warns.push(`<strong>Revisar en el Sheet.</strong> ${cap(MESES[k])}: las formas de pago de ${sec} suman ${money(w.parts)}, pero el total dice ${money(w.total)} (diferencia de ${money(w.total-w.parts)}); el tablero usa el total del Sheet.`); }));
   $("warn").innerHTML = warns.join(" "); $("warn").hidden = !warns.length;
@@ -369,7 +390,7 @@ function drawChart(sel){
   }
   const pts=[];
   MESES.forEach((m,i)=>{
-    const cx=padL+cw*i+cw/2, on=i===sel, act=DATA.cerrado[i], op=sel<0||on?1:.45;
+    const cx=padL+cw*i+cw/2, on=i===sel, act=DATA.cerrado[i], op=(sel<0||on?1:.45)*(DATA.prelim[i]?.55:1);
     let b="";
     if(act){
       b+=`<rect x="${cx-bw-1}" y="${y(DATA.tI[i])}" width="${bw}" height="${y(0)-y(DATA.tI[i])}" fill="var(--in)" opacity="${op}" rx="2"/>`;
@@ -378,7 +399,7 @@ function drawChart(sel){
     } else b+=`<rect x="${cx-bw-1}" y="${y(0)-3}" width="${bw*2+2}" height="3" fill="var(--line)"/>`;
     g+=`<g class="m" ${act?`tabindex="0" role="button" aria-label="Ver ${m}" data-i="${i}"`:""}>
       <rect x="${padL+cw*i+2}" y="${padT}" width="${cw-4}" height="${H-padT-padB+22}" fill="${on?"var(--in-soft)":"transparent"}" opacity="${on?.35:1}" rx="6"/>
-      ${b}<text x="${cx}" y="${H-10}" text-anchor="middle" class="${on?"on":""}">${cap(m).slice(0,3)}</text></g>`;
+      ${b}<text x="${cx}" y="${H-10}" text-anchor="middle" class="${on?"on":""}">${cap(m).slice(0,3)}${DATA.prelim[i]?"*":""}</text></g>`;
   });
   if(pts.length>1) g+=`<polyline points="${pts.map(p=>p[0]+","+p[1]).join(" ")}" fill="none" stroke="var(--pos)" stroke-width="2"/>`;
   pts.forEach(p=>g+=`<circle cx="${p[0]}" cy="${p[1]}" r="${p[3]?6:4}" fill="${p[2]<0?"var(--neg)":"var(--pos)"}" stroke="var(--panel)" stroke-width="2"/>`);
@@ -388,6 +409,26 @@ function drawChart(sel){
     el.addEventListener("click",go);
     el.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } });
   });
+}
+
+/* ===== Datos generales: inventario de garrafones ===== */
+function renderInventario(){
+  const inv = DATA.inventario, box = $("inventario");
+  if(!inv || !inv.tipos || !inv.tipos.length){
+    box.innerHTML = `<h2>Inventario de garrafones</h2><p class="empty">Aún no hay inventario en la pestaña INVENTARIO del Sheet.</p>`; return;
+  }
+  const tipos = inv.tipos.slice().sort((a,b)=>b.cantidad-a.cantidad), total = sum(tipos.map(t=>t.cantidad));
+  const fa = inv.actualizado ? (([y,m,d])=>new Date(y,m-1,d).toLocaleDateString("es-MX",{day:"numeric",month:"long",year:"numeric"}))(inv.actualizado.split("-").map(Number)) : "";
+  box.innerHTML = `<h2>Inventario de garrafones</h2>
+    <p class="lead">${int(total)} garrafones en total${fa?`, último movimiento el ${fa}`:""}. Para agregar o dar de baja, se anota un renglón en la pestaña INVENTARIO (+ entran, − salen).</p>
+    <div class="grid2">
+      <div>${hbars(tipos.map(t=>({k:nice(t.garrafon), v:t.cantidad})), total, "var(--in)", x=>`${int(x.v)} · ${pct(x.v/total)}`)}</div>
+      <div class="tscroll"><table class="t"><thead><tr><th>Garrafón</th><th>Cantidad</th></tr></thead><tbody>
+        ${tipos.map(t=>{ const det=Object.entries(t.detalle||{}).filter(([,v])=>v);
+          return `<tr><td>${nice(t.garrafon)}${det.length?`<br><small class="mut">${det.map(([k,v])=>`${int(v)} ${k.toLowerCase()}`).join(" · ")}</small>`:""}</td><td>${int(t.cantidad)}</td></tr>`; }).join("")}
+        <tr style="font-weight:700"><td>Total</td><td>${int(total)}</td></tr>
+      </tbody></table></div>
+    </div>`;
 }
 
 /* ===== Mes actual (solo libreta) ===== */
@@ -469,7 +510,7 @@ async function load(){
   }
   DATA=norm(d);
   if(DATA.empresa) $("brand").innerHTML = `${nice(DATA.empresa)}<small>Resultados del negocio ${DATA.anio}</small>`;
-  buildSelect(); renderResultados(); renderActual(); setStatus();
+  buildSelect(); renderResultados(); renderInventario(); renderActual(); setStatus();
 }
 $("periodo").addEventListener("change",e=>{ SEL=e.target.value; renderResultados(); });
 load();
