@@ -134,7 +134,7 @@ footer{margin-top:28px;font-size:.8rem;color:var(--muted)}
 
   <div class="tabs" role="tablist" aria-label="Periodo">
     <button role="tab" id="t-2026" aria-controls="tab-2026" aria-selected="true">2026</button>
-    <button role="tab" id="t-hist" aria-controls="tab-hist" aria-selected="false" tabindex="-1">Histórico 2024–2025</button>
+    <button role="tab" id="t-hist" aria-controls="tab-hist" aria-selected="false" tabindex="-1">Histórico</button>
   </div>
 
   <div id="tab-2026" role="tabpanel" aria-labelledby="t-2026">
@@ -516,8 +516,10 @@ const HIST = {
   fuente: "documento «Analisis de Purificadora», leído el 28 de septiembre de 2026",
   meses: [[2024,8],[2024,9],[2024,10],[2024,11],[2025,0],[2025,1],[2025,2],[2025,3],[2025,4],[2025,5],[2025,6],[2025,7],[2025,8],[2025,9],[2025,10],[2025,11]],
   ventanilla: [221,207,167,236,224,227,230,235,300,244,212,210,209,204,176,140],
-  ventanilla2026: [174,139,216,266,277,297,377],        // ene–jul 2026 del mismo documento (referencia)
   precioVentanilla: 19,
+  // Ventanilla 2026 que se toma del documento y no de MATRIZ: enero se llevó en el cuaderno y no se capturó en MATRIZ.
+  // 167 = valor confirmado por el dueño (la fila TOTAL del documento dice 174). Febrero en adelante: MATRIZ.
+  ventanilla2026Doc: {0: 167},
   ruta: [2051,2211,1499,1804,1915,1806,1946,352,null,null,null,null,null,null,null,null],
   rutaParcial: [7],                                      // abril 2025 incompleto; julio 2025 solo 15 gf (se toma sin dato)
   gastos: {
@@ -560,108 +562,155 @@ function columnas(o){
   return `<svg class="chart" viewBox="0 0 ${W} ${H+12}" role="img" aria-label="${esc(o.aria)}">${g}</svg>`;
 }
 
+// 2026 en vivo desde MATRIZ CONCENTRADO (el Sheet del dashboard), con los mismos criterios que la pestaña 2026:
+// mes cerrado en EDO RESULTADOS → pestañas mensuales (garrafones por cliente); mes sin cerrar con notas de libreta →
+// DIARIO (ruta = todas las entregas, porque la ruta en efectivo de la libreta no lleva garrafones por cliente).
+function serie2026(){
+  if(!DATA) return [];
+  const anio=DATA.anio, hoy=new Date(), ult = hoy.getFullYear()===anio ? hoy.getMonth() : hoy.getFullYear()>anio ? 11 : -1;
+  const cli=DATA.detalle.clientes||{}, out=[];
+  for(let k=0;k<=ult;k++){
+    const key=`${anio}-${String(k+1).padStart(2,"0")}`, dd=DATA.diario.filter(x=>x.fecha.slice(0,7)===key && !x.no_laborado);
+    let vent=0, ruta=0, fuente;
+    const cerradoEdr = DATA.cerrado[k] && !DATA.prelim[k];
+    if(dd.length && !cerradoEdr){ vent=sum(dd.map(x=>x.ventanilla_garrafones)); ruta=sum(dd.map(x=>x.ruta_garrafones)); fuente="libreta"; }
+    else { Object.entries(cli).forEach(([c,v])=>{ const g=(v.gf||[])[k]||0; if(/^RUTA EFECTIVO/.test(c)) return;
+             if(/^(VENTANILLA|GARRAFON)/.test(c)) vent+=g; else ruta+=g; }); fuente="pestañas"; }
+    if(vent+ruta>0) out.push({y:anio, m:k, vent, ruta, fuente, enCurso:k===hoy.getMonth()&&hoy.getFullYear()===anio});
+  }
+  // mes con muy pocos garrafones (menos de la mitad de la mediana) = registro incompleto
+  const tots=out.filter(x=>!x.enCurso).map(x=>x.vent+x.ruta).sort((a,b)=>a-b), med=tots.length?tots[Math.floor(tots.length/2)]:0;
+  out.forEach(x=>x.incompleto = !x.enCurso && x.vent+x.ruta < med/2);
+  // Ventanilla que viene del documento «Analisis de Purificadora» (notas del cuaderno no capturadas en MATRIZ)
+  out.forEach(x=>{ const d=HIST.ventanilla2026Doc[x.m]; if(d!=null && x.y===2026){ x.vent=d; x.ventDoc=true; }
+                   x.ventOk = !x.enCurso && (x.ventDoc || !x.incompleto); });
+  return out;
+}
+
 function renderHistorico(){
-  const H=HIST, M=H.meses, n=M.length, i25=M.map(([y],i)=>y===2025?i:-1).filter(i=>i>=0), i24=M.map(([y],i)=>y===2024?i:-1).filter(i=>i>=0);
-  const S=(a,ix)=>sum(ix.map(i=>a[i]||0)), anios=[[0,"2024"],[i25[0],"2025"]];
+  const H=HIST, s26=serie2026(), n0=H.meses.length;
+  const M=[...H.meses, ...s26.map(x=>[x.y,x.m])], n=M.length;
+  const v=[...H.ventanilla, ...s26.map(x=>x.vent)], ruta=[...H.ruta, ...s26.map(x=>x.ruta)];
+  const parcial=[...H.rutaParcial, ...s26.map((x,k)=>x.incompleto||x.enCurso?n0+k:-1).filter(i=>i>=0)];
+  const idx=a=>M.map(([y],i)=>y===a?i:-1).filter(i=>i>=0), i24=idx(2024), i25=idx(2025), i26=idx(2026);
+  const ok26=i26.filter(i=>!parcial.includes(i)), enCurso=s26.find(x=>x.enCurso), inc26=s26.filter(x=>x.incompleto);
+  // Ventanilla tiene su propia completitud (enero 2026 viene completo del documento aunque la ruta no)
+  const parcialV=s26.map((x,k)=>x.ventOk?-1:n0+k).filter(i=>i>=0), ok26V=i26.filter(i=>!parcialV.includes(i));
+  const docV=s26.filter(x=>x.ventDoc).map(x=>MESES[x.m]);
+  const S=(a,ix)=>sum(ix.map(i=>a[i]||0)), prom=(a,ix)=>ix.length?S(a,ix)/ix.length:0;
+  const anios=[[0,"2024"],[i25[0],"2025"],...(i26.length?[[i26[0],"2026"]]:[])];
+  const lbl=M.map(([,m])=>cap(MESES[m]).slice(0,3)), hasta=M[n-1];
+  // ---- Garrafones totales (solo meses completos)
+  const rOk=ruta.map((r,i)=>r!=null && !parcial.includes(i)?i:-1).filter(i=>i>=0);
+  const rOk25=rOk.filter(i=>i<n0), totGf=i=>rOk.includes(i)?ruta[i]+v[i]:null;
+  const shr=ix=>S(ruta,ix)/(S(ruta,ix)+S(v,ix));
+  const rMin=rOk.reduce((a,b)=>totGf(b)<totGf(a)?b:a), rMax=rOk.reduce((a,b)=>totGf(b)>totGf(a)?b:a);
   // ---- Ventanilla
-  const v=H.ventanilla, v24=S(v,i24), v25=S(v,i25);
-  const best=i25.reduce((a,b)=>v[b]>v[a]?b:a), worst=i25.reduce((a,b)=>v[b]<v[a]?b:a);
+  const v24=S(v,i24), v25=S(v,i25), best=i25.reduce((a,b)=>v[b]>v[a]?b:a), worst=i25.reduce((a,b)=>v[b]<v[a]?b:a);
   const s1=S(v,i25.slice(0,6)), s2=S(v,i25.slice(6));
-  const v26=H.ventanilla2026, k26=v26.length, yoy=sum(v26)/S(v,i25.slice(0,k26))-1;
-  const jul=(v26[6]/v[i25[6]]-1);
-  // ---- Ruta (solo meses completos)
-  const rOk=H.ruta.map((r,i)=>r!=null && !H.rutaParcial.includes(i)?i:-1).filter(i=>i>=0);
-  const rProm=S(H.ruta,rOk)/rOk.length, share=S(H.ruta,rOk)/(S(H.ruta,rOk)+S(v,rOk));
-  const rMin=rOk.reduce((a,b)=>H.ruta[b]<H.ruta[a]?b:a), rMax=rOk.reduce((a,b)=>H.ruta[b]>H.ruta[a]?b:a);
-  const totGf=i=>H.ruta[i]!=null && !H.rutaParcial.includes(i) ? H.ruta[i]+v[i] : null;
-  // ---- Gastos
-  const G=H.gastos, conceptos=Object.keys(G), gMes=M.map((_,i)=>sum(conceptos.map(c=>G[c][i])));
+  const par=ok26V.map(i=>[i, i25.find(j=>M[j][1]===M[i][1])]).filter(([,j])=>j!=null);   // mismos meses 2026 vs 2025
+  const yoy=par.length?S(v,par.map(p=>p[0]))/S(v,par.map(p=>p[1]))-1:null;
+  const best26=ok26V.length?ok26V.reduce((a,b)=>v[b]>v[a]?b:a):null;
+  // ---- Gastos (2024–2025, documento "Analisis de Purificadora")
+  const G=H.gastos, conceptos=Object.keys(G), MG=H.meses, gMes=MG.map((_,i)=>sum(conceptos.map(c=>G[c][i])));
   const g24=S(gMes,i24), g25=S(gMes,i25), gOk=i25.filter(i=>!H.gastosIncompletos.includes(i));
   const gProm=S(gMes,gOk)/gOk.length, gMax=gOk.reduce((a,b)=>gMes[b]>gMes[a]?b:a), gMin=gOk.reduce((a,b)=>gMes[b]<gMes[a]?b:a);
   const c25=conceptos.map(c=>({k:c, v:S(G[c],i25), v24:S(G[c],i24)})).sort((a,b)=>b.v-a.v);
-  const sue=c25.find(x=>x.k==="Sueldos"), pipaUlt=[...M.keys()].filter(i=>G["Pipa"][i]>=1000).pop();
+  const sue=c25.find(x=>x.k==="Sueldos"), pipaUlt=[...MG.keys()].filter(i=>G["Pipa"][i]>=1000).pop();
+  const nm=i=>`${MESES[M[i][1]]} ${M[i][0]}`;
 
+  const de=f=>s26.filter(f).map(x=>MESES[x.m]);
   const cov = [
-    ["Ventanilla (garrafones)", `<span class="ok">Completo</span> sep 2024 – dic 2025 (y ene–jul 2026 como referencia)`],
-    ["Ruta (garrafones)", `<span class="ok">Completo</span> sep 2024 – mar 2025 · <span class="part">parcial</span> abr 2025 · sin datos may – dic 2025`],
-    ["Gastos por concepto", `<span class="ok">Completo</span> sep – oct 2024 y feb – dic 2025 · <span class="part">incompleto</span> nov 2024 – ene 2025 (sin sueldos ni pipas completos)`],
-    ["Ingresos en pesos", `No hay. La ventanilla se estima a $${H.precioVentanilla} por garrafón; la ruta no se puede valorar (precio por cliente)`],
-    ["Ruta por cliente", `Solo 4 meses (sep, nov, dic 2024 y ene 2025): no alcanza para un análisis`]
+    ["Ventanilla 2024–2025", `<span class="ok">Completo</span> sep 2024 – dic 2025 (documento «Analisis de Purificadora»)`],
+    ["Ruta 2024–2025", `<span class="ok">Completo</span> sep 2024 – mar 2025 · <span class="part">parcial</span> abr 2025 · sin datos may – dic 2025`],
+    ["Garrafones 2026", s26.length
+      ? `<span class="ok">En vivo</span> de MATRIZ CONCENTRADO: ${de(x=>x.fuente==="pestañas").join(", ")||"—"} de las pestañas mensuales`
+        + (de(x=>x.fuente==="libreta").length?` · ${de(x=>x.fuente==="libreta").join(", ")} de la libreta`:"")
+        + (docV.length?` · ventanilla de ${docV.join(", ")} del documento «Analisis de Purificadora» (notas del cuaderno que no están en MATRIZ)`:"")
+        + (inc26.length?` · <span class="part">incompleto</span> ${inc26.map(x=>MESES[x.m]).join(", ")}`:"")
+        + (enCurso?` · <span class="part">en curso</span> ${MESES[enCurso.m]}`:"")
+      : `<span class="part">Cargando…</span>`],
+    ["Gastos por concepto", `<span class="ok">Completo</span> sep – oct 2024 y feb – dic 2025 · <span class="part">incompleto</span> nov 2024 – ene 2025. El gasto completo de 2026 está en la pestaña 2026 y no se mezcla aquí (aquel sí incluye renta, pipas y transferencias)`],
+    ["Ingresos en pesos 2024–2025", `No hay. La ventanilla se estima a $${H.precioVentanilla} por garrafón; la ruta no se puede valorar (precio por cliente)`]
   ];
+  const txtParcial = [...(inc26.length?[`${inc26.map(x=>MESES[x.m]).join(", ")} 2026 tiene muy pocos garrafones de ruta registrados en MATRIZ (registro incompleto)`]:[]),
+                      ...(enCurso?[`${MESES[enCurso.m]} 2026 va en curso`]:[])];
 
   $("tab-hist").innerHTML = `
-    <div class="sec-head"><div class="per">Histórico · <b>septiembre 2024 a diciembre 2025</b></div></div>
-    <div class="hero"><h1>En 2025 la ventanilla vendió <span class="amt">${int(v25)}</span> garrafones y los gastos registrados sumaron <span class="amt">${money(g25)}</span>.</h1>
-      <p>Datos del ${H.fuente}. Los datos de 2024 y 2025 no están completos: esta pestaña muestra solo lo que sí existe y no calcula utilidad. Los números de 2026 están en la pestaña 2026.</p></div>
+    <div class="sec-head"><div class="per">Histórico · <b>septiembre 2024 a ${MESES[hasta[1]]} ${hasta[0]}</b></div></div>
+    <div class="hero"><h1>En 2025 la ventanilla vendió <span class="amt">${int(v25)}</span> garrafones${i26.length?` y en 2026 lleva <span class="amt">${int(S(v,i26))}</span>`:""}.</h1>
+      <p>2024 y 2025 salen del documento «Analisis de Purificadora» (leído el 28 de septiembre de 2026); 2026 sale en vivo de MATRIZ CONCENTRADO, igual que la pestaña 2026. Los datos de 2024 y 2025 no están completos: aquí solo se analiza lo que existe y no se calcula utilidad.</p></div>
 
-    <section class="panel"><h2>Qué datos hay</h2><p class="lead">Cada análisis de abajo usa solo los meses completos de su serie.</p>
+    <section class="panel"><h2>Qué datos hay</h2><p class="lead">Cada análisis usa solo los meses completos de su serie. Barras claras = mes parcial, incompleto o en curso.</p>
       <div class="tscroll"><table class="t cov"><thead><tr><th>Serie</th><th>Cobertura</th></tr></thead><tbody>
         ${cov.map(([a,b])=>`<tr><td>${a}</td><td>${b}</td></tr>`).join("")}</tbody></table></div></section>
 
     <section class="panel">
       <div class="chart-head"><h2 style="margin:0">Garrafones vendidos por mes</h2>
         <div class="keys"><span><i style="background:var(--in)"></i>Ruta</span><span><i style="background:var(--in-soft)"></i>Ventanilla</span></div></div>
-      ${columnas({labels:M.map(([,m])=>cap(MESES[m]).slice(0,3)), anios, aria:"Garrafones vendidos por mes, ruta y ventanilla",
-        capas:[{v:H.ruta, fill:"var(--in)"},{v, fill:"var(--in-soft)"}],
-        atenuar:H.rutaParcial, etiquetas:M.map((_,i)=>i).filter(i=>totGf(i)!=null), fmt:int,
-        bandas:[{desde:8, hasta:15, texto:"Ruta sin datos (may – dic 2025): solo ventanilla"}],
-        tip:i=>`${mesLargo(M[i])}: ${H.ruta[i]!=null?`ruta ${int(H.ruta[i])}${H.rutaParcial.includes(i)?" (parcial)":""} + `:"ruta sin dato + "}ventanilla ${int(v[i])} gf`})}
+      ${columnas({labels:lbl, anios, aria:"Garrafones vendidos por mes, ruta y ventanilla",
+        capas:[{v:ruta, fill:"var(--in)"},{v, fill:"var(--in-soft)"}], atenuar:parcial,
+        etiquetas:[rMax, rMin, ...(ok26.length?[ok26[ok26.length-1]]:[]), ...(enCurso?[n-1]:[])], fmt:int,
+        bandas:[{desde:8, hasta:15, texto:"Ruta sin datos (may – dic 2025)"}],
+        tip:i=>`${nm(i)}: ${ruta[i]!=null?`ruta ${int(ruta[i])} + `:"ruta sin dato + "}ventanilla ${int(v[i])} gf${parcial.includes(i)?" (parcial)":""}${i>=n0?` · ${s26[i-n0].fuente==="libreta"?"libreta":"pestañas mensuales"}${s26[i-n0].ventDoc?"; ventanilla del documento":""}`:""}`})}
       <ul class="an">
-        <li>En los ${rOk.length} meses completos (sep 2024 – mar 2025) se vendieron en promedio <b>${int(rProm+S(v,rOk)/rOk.length)} garrafones al mes</b>; la ruta fue el <b>${pct(share)}</b> y la ventanilla el ${pct(1-share)}.</li>
-        <li>El mes más alto fue ${mesLargo(M[rMax])} (${int(totGf(rMax))} gf) y el más bajo ${mesLargo(M[rMin])} (${int(totGf(rMin))} gf): en noviembre 2024 bajaron ruta y ventanilla al mismo tiempo.</li>
-        <li>Abril 2025 está incompleto en ruta (${int(H.ruta[7])} gf) y de mayo a diciembre 2025 no hay datos de ruta, por eso no hay total anual de 2025.</li>
+        <li>Sep 2024 – mar 2025 (${rOk25.length} meses completos): <b>${int(prom(ruta,rOk25)+prom(v,rOk25))} garrafones al mes</b>, ruta ${pct(shr(rOk25))} y ventanilla ${pct(1-shr(rOk25))}.</li>
+        ${ok26.length?`<li>2026 (${ok26.length} meses completos): <b>${int(prom(ruta,ok26)+prom(v,ok26))} garrafones al mes</b> (${pct((prom(ruta,ok26)+prom(v,ok26))/(prom(ruta,rOk25)+prom(v,rOk25))-1)} contra sep 2024 – mar 2025), ruta ${pct(shr(ok26))} y ventanilla ${pct(1-shr(ok26))}.</li>`:""}
+        <li>Mes más alto: ${nm(rMax)} (${int(totGf(rMax))} gf). Más bajo: ${nm(rMin)} (${int(totGf(rMin))} gf).</li>
+        <li>Abril 2025 está incompleto en ruta y de mayo a diciembre 2025 no hay datos de ruta${txtParcial.length?`; ${txtParcial.join("; ")}`:""}.</li>
       </ul>
     </section>
 
     <section class="panel"><h2>Ventanilla</h2>
-      <p class="lead">Serie completa. Ingreso estimado a $${H.precioVentanilla} por garrafón (precio de ese periodo).</p>
+      <p class="lead">Serie completa. 2024–2025 con ingreso estimado a $${H.precioVentanilla} por garrafón (precio de ese periodo).</p>
       <div class="kv">
-        <div><span>2025</span><b>${int(v25)} gf</b><small>≈ ${money(v25*H.precioVentanilla)} · ${int(v25/12)} al mes</small></div>
         <div><span>Sep – dic 2024</span><b>${int(v24)} gf</b><small>≈ ${money(v24*H.precioVentanilla)} · ${int(v24/i24.length)} al mes</small></div>
+        <div><span>2025</span><b>${int(v25)} gf</b><small>≈ ${money(v25*H.precioVentanilla)} · ${int(v25/12)} al mes</small></div>
+        ${i26.length?`<div><span>2026 (a la fecha)</span><b>${int(S(v,i26))} gf</b><small>${ok26V.length?`${int(prom(v,ok26V))} al mes en meses completos`:""}</small></div>`:""}
         <div><span>Mejor mes 2025</span><b>${cap(MESES[M[best][1]])}</b><small>${int(v[best])} garrafones</small></div>
-        <div><span>Peor mes 2025</span><b>${cap(MESES[M[worst][1]])}</b><small>${int(v[worst])} garrafones</small></div>
+        ${best26!=null?`<div><span>Mejor mes 2026</span><b>${cap(MESES[M[best26][1]])}</b><small>${int(v[best26])} garrafones</small></div>`:""}
       </div>
-      ${columnas({labels:[...M.map(([,m])=>cap(MESES[m]).slice(0,3)), ...v26.map((_,m)=>cap(MESES[m]).slice(0,3))],
-        anios:[...anios,[n,"2026"]], aria:"Garrafones de ventanilla por mes", fmt:int,
-        capas:[{v:[...v, ...v26], fill:"var(--in)"}], atenuar:v26.map((_,k)=>n+k),
-        etiquetas:[best, worst, n+k26-1, i24.reduce((a,b)=>v[b]>v[a]?b:a)],
-        tip:i=>i<n ? `${mesLargo(M[i])}: ${int(v[i])} gf (≈ ${money(v[i]*H.precioVentanilla)})` : `${MESES[i-n]} 2026: ${int(v26[i-n])} gf (referencia)`})}
+      ${columnas({labels:lbl, anios, aria:"Garrafones de ventanilla por mes", fmt:int,
+        capas:[{v, fill:"var(--in)"}], atenuar:parcialV,
+        etiquetas:[best, worst, ...(best26!=null?[best26]:[]), i24.reduce((a,b)=>v[b]>v[a]?b:a)],
+        tip:i=>`${nm(i)}: ${int(v[i])} gf${i<n0?` (≈ ${money(v[i]*H.precioVentanilla)})`:""}${parcialV.includes(i)?" (parcial)":""}${i>=n0&&s26[i-n0].ventDoc?" · documento «Analisis de Purificadora»":""}`})}
       <ul class="an">
-        <li>2025 empezó estable (224 – 235 al mes) y tuvo su pico en ${MESES[M[best][1]]} (${int(v[best])}). La segunda mitad cayó: ${int(s2)} garrafones contra ${int(s1)} de la primera (${pct(s2/s1-1)}), hasta ${int(v[worst])} en ${MESES[M[worst][1]]}.</li>
-        <li>2026 (barras claras, mismo documento) arrancó abajo pero se recuperó: de enero a julio lleva ${int(sum(v26))} garrafones contra ${int(S(v,i25.slice(0,k26)))} del mismo periodo de 2025 (<b class="${cls(yoy)}">${yoy>=0?"+":""}${pct(yoy)}</b>). Julio 2026 fue ${pct(jul)} arriba de julio 2025.</li>
+        <li>2025 tuvo su pico en ${MESES[M[best][1]]} (${int(v[best])}); la segunda mitad cayó a ${int(s2)} garrafones contra ${int(s1)} de la primera (${pct(s2/s1-1)}), hasta ${int(v[worst])} en ${MESES[M[worst][1]]}.</li>
+        ${yoy!=null?`<li>Mismos meses completos de 2026 contra 2025 (${par.map(p=>MESES[M[p[0]][1]].slice(0,3)).join(", ")}): ${int(S(v,par.map(p=>p[0])))} contra ${int(S(v,par.map(p=>p[1])))} garrafones (<b class="${cls(yoy)}">${yoy>=0?"+":""}${pct(yoy)}</b>).${best26!=null?` El mejor mes de 2026 es ${MESES[M[best26][1]]} con ${int(v[best26])}.`:""}</li>`:""}
       </ul>
       <div class="tscroll" style="margin-top:14px"><table class="t"><thead><tr><th>Mes</th><th>2024</th><th>2025</th><th>2026</th><th>2026 vs 2025</th></tr></thead><tbody>
-        ${MESES.map((m,k)=>{ const a=M.findIndex(([y,mm])=>y===2024&&mm===k), b=M.findIndex(([y,mm])=>y===2025&&mm===k), c=v26[k];
-          const d=(c!=null&&b>=0)?c/v[b]-1:null;
-          return `<tr><td>${cap(m)}</td><td>${a>=0?int(v[a]):"—"}</td><td>${b>=0?int(v[b]):"—"}</td><td>${c!=null?int(c):"—"}</td><td class="${d==null?"":cls(d)}">${d==null?"—":(d>=0?"+":"")+pct(d)}</td></tr>`; }).join("")}
+        ${MESES.map((m,k)=>{ const f=a=>M.findIndex(([y,mm])=>y===a&&mm===k), a=f(2024), b=f(2025), c=f(2026);
+          const d=(c>=0&&b>=0&&!parcialV.includes(c))?v[c]/v[b]-1:null, doc=c>=0&&s26[c-n0].ventDoc;
+          return `<tr><td>${cap(m)}</td><td>${a>=0?int(v[a]):"—"}</td><td>${b>=0?int(v[b]):"—"}</td><td>${c>=0?int(v[c])+(parcialV.includes(c)?"*":"")+(doc?"†":""):"—"}</td><td class="${d==null?"":cls(d)}">${d==null?"—":(d>=0?"+":"")+pct(d)}</td></tr>`; }).join("")}
       </tbody></table></div>
+      ${parcialV.length||docV.length?`<p class="lead" style="margin:8px 0 0">${parcialV.length?"* mes incompleto o en curso: no se compara. ":""}${docV.length?"† del documento «Analisis de Purificadora» (notas del cuaderno que no están en MATRIZ).":""}</p>`:""}
     </section>
 
     <section class="panel"><h2>Ruta</h2>
-      <p class="lead">Solo ${rOk.length} meses completos (sep 2024 – mar 2025). Sin precio por cliente no se puede calcular el ingreso.</p>
+      <p class="lead">Sin precio por cliente de 2024–2025 no se puede calcular su ingreso; aquí se comparan garrafones.</p>
       <div class="kv">
-        <div><span>Promedio mensual</span><b>${int(rProm)} gf</b><small>sep 2024 – mar 2025</small></div>
-        <div><span>Mes más alto</span><b>${cap(MESES[M[rMax][1]])} ${M[rMax][0]}</b><small>${int(H.ruta[rMax])} garrafones</small></div>
-        <div><span>Mes más bajo</span><b>${cap(MESES[M[rMin][1]])} ${M[rMin][0]}</b><small>${int(H.ruta[rMin])} garrafones</small></div>
-        <div><span>Peso en el total</span><b>${pct(share)}</b><small>de los garrafones vendidos</small></div>
+        <div><span>Sep 2024 – mar 2025</span><b>${int(prom(ruta,rOk25))} gf</b><small>promedio mensual (${rOk25.length} meses)</small></div>
+        ${ok26.length?`<div><span>2026</span><b>${int(prom(ruta,ok26))} gf</b><small>promedio mensual (${ok26.length} meses completos)</small></div>
+        <div><span>Cambio</span><b class="${cls(prom(ruta,ok26)/prom(ruta,rOk25)-1)}">${pct(prom(ruta,ok26)/prom(ruta,rOk25)-1)}</b><small>2026 contra sep 2024 – mar 2025</small></div>`:""}
+        <div><span>Peso de la ruta</span><b>${pct(shr(rOk))}</b><small>de los garrafones, meses completos</small></div>
       </div>
     </section>
 
     <section class="panel">
-      <div class="chart-head"><h2 style="margin:0">Gastos registrados por mes</h2>
+      <div class="chart-head"><h2 style="margin:0">Gastos registrados por mes · 2024–2025</h2>
         <div class="keys"><span><i style="background:var(--out)"></i>Gastos</span><span><i style="background:var(--out);opacity:.5"></i>Mes incompleto</span></div></div>
-      ${columnas({labels:M.map(([,m])=>cap(MESES[m]).slice(0,3)), anios, aria:"Gastos registrados por mes",
+      ${columnas({labels:MG.map(([,m])=>cap(MESES[m]).slice(0,3)), anios:anios.slice(0,2), aria:"Gastos registrados por mes",
         capas:[{v:gMes, fill:"var(--out)"}], atenuar:H.gastosIncompletos, etiquetas:[gMax, gMin, 0], fmt:x=>money(x),
-        tip:i=>`${mesLargo(M[i])}: ${money(gMes[i])}${H.gastosIncompletos.includes(i)?" (incompleto)":""}`})}
+        tip:i=>`${mesLargo(MG[i])}: ${money(gMes[i])}${H.gastosIncompletos.includes(i)?" (incompleto)":""}`})}
       <ul class="an">
-        <li>2025: <b>${money(g25)}</b> registrados. En los ${gOk.length} meses completos (feb – dic) el promedio fue <b>${money(gProm)} al mes</b>; el más alto ${MESES[M[gMax][1]]} (${money(gMes[gMax])}, con sueldos de ${money(G["Sueldos"][gMax])}) y el más bajo ${MESES[M[gMin][1]]} (${money(gMes[gMin])}).</li>
+        <li>2025: <b>${money(g25)}</b> registrados. En los ${gOk.length} meses completos (feb – dic) el promedio fue <b>${money(gProm)} al mes</b>; el más alto ${MESES[MG[gMax][1]]} (${money(gMes[gMax])}, con sueldos de ${money(G["Sueldos"][gMax])}) y el más bajo ${MESES[MG[gMin][1]]} (${money(gMes[gMin])}).</li>
         <li>Los sueldos son el <b>${pct(sue.v/g25)}</b> del gasto registrado de 2025 (${money(sue.v)}).</li>
-        <li>Las pipas aparecen hasta ${mesLargo(M[pipaUlt])}; después solo $100 – $150 algunos meses, así que el agua casi no está registrada en este documento. Tampoco incluye renta, seguro ni internet: es gasto de caja, no el gasto total del negocio.</li>
+        <li>Las pipas aparecen hasta ${mesLargo(MG[pipaUlt])}; después solo $100 – $150 algunos meses. Tampoco incluye renta, seguro ni internet: es gasto de caja, no el gasto total. Por eso el gasto de 2026 (completo) está en su propia pestaña y no se grafica aquí.</li>
         <li>Sep – dic 2024: ${money(g24)}, pero noviembre, diciembre y enero 2025 (barras claras) están incompletos.</li>
       </ul>
     </section>
 
-    <section class="panel"><h2>En qué se gastó</h2><p class="lead">Participación de cada concepto en el gasto registrado de 2025.</p>
+    <section class="panel"><h2>En qué se gastó · 2025</h2><p class="lead">Participación de cada concepto en el gasto registrado de 2025.</p>
       <div class="grid2">
         <div>${hbars(c25.filter(x=>x.v>0).map(x=>({k:x.k, v:x.v})), g25, "var(--out)", x=>`${money(x.v)} · ${pct(x.v/g25)}`)}</div>
         <div class="tscroll"><table class="t"><thead><tr><th>Concepto</th><th>Sep – dic 2024</th><th>2025</th><th>% 2025</th><th>Promedio mes 2025</th></tr></thead><tbody>
@@ -706,7 +755,7 @@ async function load(){
   }
   DATA=norm(d);
   if(DATA.empresa) $("brand").innerHTML = `${nice(DATA.empresa)}<small>Resultados del negocio ${DATA.anio}</small>`;
-  buildSelect(); renderResultados(); renderInventario(); renderActual(); setStatus();
+  buildSelect(); renderResultados(); renderInventario(); renderActual(); renderHistorico(); setStatus();
 }
 $("periodo").addEventListener("change",e=>{ SEL=e.target.value; renderResultados(); });
 load();
