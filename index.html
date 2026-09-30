@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
 <style>
 /* Estilo basado en DESIGN (1).md (Seline Analytics): papel cálido, neutros "stone", un solo acento cian,
    títulos en peso 400 con tracking cerrado, tarjetas planas de 10px con borde fino, controles en píldora.
@@ -137,6 +139,32 @@ svg.chart text.on{fill:var(--ink);font-weight:500}
 .ok{color:var(--accent-edge);font-weight:500} .part{color:var(--ink);font-weight:500;border:1px solid var(--line);border-radius:9999px;padding:0 8px}
 ul.an{margin:16px 0 0;padding-left:20px;font-size:14px;color:var(--ink-soft)} ul.an li{margin:6px 0}
 
+/* Clientes */
+.lock{max-width:420px;margin:48px 0}
+.lock form{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.lock input{font:inherit;font-size:14px;color:var(--ink);background:var(--panel);border:1px solid var(--line-2);border-radius:6px;padding:8px 12px;flex:1;min-width:180px}
+.lock input:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+.btn{font:inherit;font-size:14px;font-weight:500;color:#fff;background:var(--accent);border:1px solid var(--accent-edge);border-radius:9999px;padding:8px 18px;cursor:pointer}
+.btn.ghost{color:var(--ink);background:transparent;border-color:var(--line)}
+.msg{margin-top:10px;font-size:13px;color:var(--neg);min-height:1.2em}
+#mapa{height:480px;border-radius:10px;border:1px solid var(--line);margin-top:12px;z-index:0}
+.leaflet-container{font-family:var(--font);background:var(--band)}
+.leaflet-tile-pane{filter:grayscale(1) contrast(.94) brightness(1.03)}
+.leaflet-popup-content{font-size:13px;line-height:1.5;margin:12px 14px;min-width:220px}
+.leaflet-popup-content h4{margin:0 0 2px;font-family:var(--font-d);font-weight:500;font-size:16px}
+.leaflet-popup-content dl{display:grid;grid-template-columns:auto auto;gap:2px 14px;margin:8px 0 0}
+.leaflet-popup-content dt{color:#78716c} .leaflet-popup-content dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+.cat{display:inline-block;font-size:12px;font-weight:500;border-radius:9999px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}
+.cat.A{background:var(--wash);color:var(--accent-edge);border-color:transparent}
+.mx{border-collapse:separate;border-spacing:6px;width:100%;table-layout:fixed}
+.mx th{font-size:12px;font-weight:500;color:var(--muted);text-align:center}
+.mx td{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center;vertical-align:top}
+.mx td b{display:block;font-family:var(--font-d);font-weight:400;font-size:24px;line-height:1.2}
+.mx td small{color:var(--muted);font-size:12px}
+.mx td.hi{background:var(--wash);border-color:transparent}
+.dotc{display:inline-block;width:10px;height:10px;border-radius:50%;border:1px solid #0c0a09;margin-right:6px;vertical-align:-1px}
+table.t.cli td{font-size:13px} table.t.cli td small{color:var(--muted)}
+
 .band{margin-top:64px;background:var(--band);border:1px solid var(--line);border-radius:16px;padding:4px 24px 24px}
 .band .sec-head{padding-top:24px}
 .band section.panel{margin-top:16px}
@@ -156,6 +184,7 @@ footer{margin-top:40px;font-size:12px;color:var(--ash)}
   <div class="tabs" role="tablist" aria-label="Periodo">
     <button role="tab" id="t-2026" aria-controls="tab-2026" aria-selected="true">2026</button>
     <button role="tab" id="t-hist" aria-controls="tab-hist" aria-selected="false" tabindex="-1">Histórico</button>
+    <button role="tab" id="t-cli" aria-controls="tab-cli" aria-selected="false" tabindex="-1">Clientes</button>
   </div>
 
   <div id="tab-2026" role="tabpanel" aria-labelledby="t-2026">
@@ -196,6 +225,9 @@ footer{margin-top:40px;font-size:12px;color:var(--ash)}
 
   <!-- ============ HISTÓRICO 2024–2025 (documento "Analisis de Purificadora") ============ -->
   <div id="tab-hist" role="tabpanel" aria-labelledby="t-hist" hidden></div>
+
+  <!-- ============ CLIENTES (protegida con clave: direcciones, precios y márgenes) ============ -->
+  <div id="tab-cli" role="tabpanel" aria-labelledby="t-cli" hidden></div>
 
   <footer id="foot"></footer>
 </div>
@@ -746,20 +778,215 @@ function renderHistorico(){
     </section>`;
 }
 
-/* ===== Pestañas ===== */
-function showTab(t){
-  const hist = t==="hist";
-  $("tab-2026").hidden = hist; $("tab-hist").hidden = !hist;
-  [["t-2026",!hist],["t-hist",hist]].forEach(([id,on])=>{ $(id).setAttribute("aria-selected",on); $(id).tabIndex = on?0:-1; });
-  try{ history.replaceState(null,"",hist?"#historico":location.pathname+location.search); }catch(e){}
+/* ===== Clientes: ABC-XYZ, márgenes y mapa (datos protegidos con clave) =====
+   Garrafones y ventas por mes: pestañas mensuales de MATRIZ (DATA.detalle.clientes, 2026 de febrero al último mes cerrado).
+   Domicilio, precio, días de visita y ubicación: pestaña CLIENTES + GEO CLIENTES, vía ?vista=clientes&clave=… */
+let CLI=null, MAPA=null;
+const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:2,maximumFractionDigits:2}).format(n||0);
+const CAT_COLOR = {A:"#3ba6f1", B:"#78716c", C:"#e7e5e4"};   // hex: Leaflet pinta SVG y no resuelve var()
+
+function lockHTML(msg){
+  return `<div class="lock"><div class="sec-head" style="padding-top:24px"><div class="per">Clientes · acceso restringido</div></div>
+    <h1 style="font-family:var(--font-d);font-weight:400;font-size:32px;letter-spacing:-.025em;line-height:1.25;margin:8px 0 0">Direcciones, precios y márgenes por cliente.</h1>
+    <p class="mut" style="margin:10px 0 0">Esta pestaña tiene datos sensibles; escribe la clave de Clientes.</p>
+    <form id="cli-form" autocomplete="off"><input id="cli-clave" type="password" placeholder="Clave de Clientes" aria-label="Clave de Clientes" required>
+      <button class="btn" type="submit">Entrar</button></form><div class="msg" id="cli-msg" role="alert">${msg?esc(msg):""}</div></div>`;
 }
-$("t-2026").addEventListener("click",()=>showTab("2026"));
-$("t-hist").addEventListener("click",()=>showTab("hist"));
+function pedirClave(msg){
+  $("tab-cli").innerHTML = lockHTML(msg);
+  $("cli-form").addEventListener("submit", e=>{ e.preventDefault(); cargarClientes($("cli-clave").value.trim()); });
+}
+async function cargarClientes(clave){
+  if(!clave) return pedirClave();
+  const m=$("cli-msg"); if(m) m.textContent="Cargando…";
+  try{
+    const r=await fetch(`${CONFIG.SOURCE_URL}?key=${encodeURIComponent(CONFIG.KEY)}&vista=clientes&clave=${encodeURIComponent(clave)}&t=${Date.now()}`);
+    const j=await r.json();
+    if(!j.ok){ try{ sessionStorage.removeItem("cliClave"); }catch(e){} return pedirClave(j.error||"No se pudo leer Clientes"); }
+    try{ sessionStorage.setItem("cliClave", clave); }catch(e){}
+    CLI=j; renderClientes();
+  }catch(e){ pedirClave("No se pudo conectar con el Sheet."); }
+}
+
+// Clasificación ABC: A hasta el 80% acumulado (incluye al que cruza), B hasta 95%, C el resto.
+function abc(items, key){
+  const tot=sum(items.map(x=>x[key])), ord=items.slice().sort((a,b)=>b[key]-a[key]); let acc=0;
+  ord.forEach(x=>{ const antes=acc/tot; acc+=x[key]; x["abc_"+key] = !x[key] ? "C" : antes<.80 ? "A" : antes<.95 ? "B" : "C"; });
+}
+const xyz = cv => cv==null ? "Z" : cv<.25 ? "X" : cv<.5 ? "Y" : "Z";
+
+function calcClientes(){
+  const anio=DATA.anio, cli=DATA.detalle.clientes||{}, K=CLI.costos;
+  const ult=DATA.cerrado.lastIndexOf(true), ks=[]; for(let k=1;k<=ult;k++) ks.push(k);   // feb → último mes cerrado
+  const agua = K.litrosGarrafon*K.pipaPrecio/K.pipaLitros/(1-(K.merma||0));
+  const insumos = K.insumos ? sum(Object.values(K.insumos)) : 0, costoVar = agua+insumos;
+  // Gasolina REAL: promedio mensual de los gastos de gasolina (pestañas GASTOS) en el mismo periodo
+  const gasC = Object.keys(DATA.detalle.gastos||{}).filter(k=>/GASOLINA/.test(k));
+  const gasMes = ks.length ? sum(ks.map(k=>sum(gasC.map(c=>DATA.detalle.gastos[c][k]||0))))/ks.length : 0;
+  const lista = CLI.clientes.filter(c=>!CONFIG.CANALES.test(c.nombre)).map(c=>{
+    const d=cli[c.nombre]||{gf:[],imp:[]}, gf=ks.map(k=>d.gf[k]||0), imp=ks.map(k=>d.imp[k]||0);
+    const gfT=sum(gf), impT=sum(imp), n=ks.length||1, gfM=gfT/n, impM=impT/n;
+    const sd=Math.sqrt(sum(gf.map(x=>(x-gfM)**2))/n), cv=gfM>0?sd/gfM:null;
+    const precio = c.precio || (gfT?impT/gfT:null);
+    const factura = /FACTURA|^SI$/.test(c.factura||"");
+    const precioNeto = precio!=null ? (factura ? precio/(1+(K.iva||0)) : precio) : null;
+    const visitas = c.dias.length*K.semanasMes;
+    const costoVisita = c.km!=null ? 2*c.km/K.kmPorLitro*K.precioGasolina : null;          // referencia: viaje exclusivo
+    const kmMes = c.km!=null ? 2*c.km*visitas : null;                                         // peso para repartir la gasolina real
+    return {...c, gf, imp, gfT, impT, gfM, impM, gfUlt:d.gf[ult]||0, impUlt:d.imp[ult]||0, cv, xyz:xyz(cv), precio,
+            factura, precioNeto, visitas, costoVisita, kmMes, mapa: c.lat!=null&&c.lng!=null};
+  });
+  // Costo real de ruta: la gasolina del mes se reparte según los km que cada cliente agrega (visitas × ida y vuelta)
+  const kmTot = sum(lista.filter(x=>x.gfT>0||x.impT>0).map(x=>x.kmMes||0));
+  lista.forEach(x=>{
+    x.costoRutaMes = x.kmMes!=null && kmTot ? gasMes*x.kmMes/kmTot : (x.kmMes===0?0:null);
+    x.rutaGf = x.costoRutaMes!=null && x.gfM>0 ? x.costoRutaMes/x.gfM : null;
+    x.margenGf = x.precioNeto!=null ? x.precioNeto-costoVar-(x.rutaGf||0) : null;
+    x.margenPct = x.margenGf!=null && x.precioNeto ? x.margenGf/x.precioNeto : null;
+    x.utilMes = x.margenGf!=null ? x.margenGf*x.gfM : null;
+  });
+  const activos = lista.filter(x=>x.impT>0||x.gfT>0);
+  abc(activos,"impT"); abc(activos,"gfT");
+  lista.forEach(x=>{ if(!activos.includes(x)){ x.abc_impT="—"; x.abc_gfT="—"; x.xyz="—"; } x.cat = x.abc_impT==="—" ? "—" : x.abc_impT+x.xyz; });
+  return {lista, activos, ks, ult, agua, insumos, costoVar, gasMes, kmTot, K};
+}
+
+function popupHTML(x){
+  const f=(v,fn)=>v==null?"—":fn(v);
+  return `<h4>${esc(nice(x.nombre))}</h4><span class="cat ${x.abc_impT}">${x.cat}</span> <small style="color:#78716c">ventas ${x.abc_impT} · garrafones ${x.abc_gfT} · variabilidad ${x.xyz}</small>
+    <dl><dt>Garrafones / mes</dt><dd>${int(x.gfM)} (último ${int(x.gfUlt)})</dd>
+    <dt>Garrafones 2026</dt><dd>${int(x.gfT)}</dd>
+    <dt>Ventas / mes</dt><dd>${money(x.impM)} (último ${money(x.impUlt)})</dd>
+    <dt>Ventas 2026</dt><dd>${money(x.impT)}</dd>
+    <dt>Precio por garrafón</dt><dd>${f(x.precio,money2)}${x.factura?` (${money2(x.precioNeto)} sin IVA)`:""}</dd>
+    <dt>Margen por garrafón</dt><dd>${f(x.margenGf,v=>money2(v)+" · "+pct(x.margenPct))}</dd>
+    <dt>Distancia (por calle)</dt><dd>${f(x.km,v=>v.toLocaleString("es-MX",{maximumFractionDigits:1})+" km · "+x.min+" min")}</dd>
+    <dt>Visitas / mes</dt><dd>${x.dias.length?`${int(x.visitas)} (${x.dias.map(d=>d.slice(0,2).toLowerCase()).join(", ")})`:"sin días de ruta"}</dd>
+    <dt>Gasolina asignada / mes</dt><dd>${f(x.costoRutaMes,money)}${x.rutaGf!=null?` · ${money2(x.rutaGf)}/gf`:""}</dd>
+    <dt>Viaje exclusivo (ref.)</dt><dd>${f(x.costoVisita,money)} por visita</dd>
+    <dt>Utilidad / mes</dt><dd>${f(x.utilMes,money)}</dd></dl>`;
+}
+
+function dibujarMapa(R){
+  if(!window.L){ setTimeout(()=>dibujarMapa(R),300); return; }
+  if(MAPA){ MAPA.remove(); MAPA=null; }
+  const P=CLI.purificadora, pts=R.lista.filter(x=>x.mapa);
+  MAPA=L.map("mapa",{scrollWheelZoom:false});
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(MAPA);
+  const b=[]; const maxGf=Math.max(1,...pts.map(x=>x.gfM));
+  if(P.lat!=null){ b.push([P.lat,P.lng]);
+    L.marker([P.lat,P.lng],{icon:L.divIcon({className:"",html:'<div style="width:18px;height:18px;border-radius:5px;background:#0c0a09;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',iconSize:[18,18]}),zIndexOffset:1000})
+      .addTo(MAPA).bindPopup(`<h4>${esc(P.nombre)}</h4><small style="color:#78716c">Punto de partida de la ruta${P.fuente?` · ubicación: ${esc(P.fuente.toLowerCase())}`:""}</small>`); }
+  pts.sort((a,b)=>b.gfM-a.gfM).forEach(x=>{ b.push([x.lat,x.lng]);
+    const r=6+10*Math.sqrt(x.gfM/maxGf), m=L.circleMarker([x.lat,x.lng],{radius:r, color:"#0c0a09", weight:1, fillColor:CAT_COLOR[x.abc_impT]||"#e7e5e4", fillOpacity:.9}).addTo(MAPA);
+    m.bindPopup(popupHTML(x)); m.bindTooltip(nice(x.nombre),{direction:"top",offset:[0,-r]});
+    if(P.lat!=null){ let ln=null;
+      m.on("popupopen",()=>{ ln=L.polyline([[P.lat,P.lng],[x.lat,x.lng]],{color:"#0c0a09",weight:1.5,dashArray:"4 4",opacity:.7}).addTo(MAPA); });
+      m.on("popupclose",()=>{ if(ln) MAPA.removeLayer(ln); }); } });
+  if(b.length) MAPA.fitBounds(b,{padding:[30,30],maxZoom:15}); else MAPA.setView([20.674,-103.387],13);
+}
+
+function renderClientes(){
+  if(!CLI) return;
+  if(!DATA){ $("tab-cli").dataset.pend="1"; $("tab-cli").innerHTML=`<p class="mut" style="margin-top:40px">Cargando datos…</p>`; return; }
+  delete $("tab-cli").dataset.pend;
+  const R=calcClientes(), A=R.activos, ult=R.ult, mesUlt=MESES[ult], per=`febrero a ${mesUlt} ${DATA.anio}`;
+  const impTot=sum(A.map(x=>x.impT)), gfTot=sum(A.map(x=>x.gfT));
+  const enMapa=R.lista.filter(x=>x.mapa), revision=R.lista.filter(x=>!x.mapa);
+  const aV=A.filter(x=>x.abc_impT==="A"), aShare=sum(aV.map(x=>x.impT))/impTot;
+  const cats=["A","B","C"], xs=["X","Y","Z"];
+  const celda=(a,z)=>{ const g=A.filter(x=>x.abc_impT===a&&x.xyz===z); return {n:g.length, imp:sum(g.map(x=>x.impT))}; };
+  const K=R.K;
+  const conMargen=A.filter(x=>x.margenGf!=null), utilTot=sum(conMargen.map(x=>x.utilMes||0));
+  const peor=conMargen.slice().sort((a,b)=>a.margenPct-b.margenPct).slice(0,3);
+  const desc={AX:"clave y estables: cuidarlos",AY:"clave con altibajos",AZ:"clave pero irregulares: vigilar",
+              BX:"medianos estables",BY:"medianos con altibajos",BZ:"medianos irregulares",
+              CX:"pequeños estables",CY:"pequeños con altibajos",CZ:"pequeños e irregulares: revisar si conviene ir"};
+  const fila=x=>`<tr><td><span class="dotc" style="background:${CAT_COLOR[x.abc_impT]||"#fff"}"></span>${esc(nice(x.nombre))}<br><small>${esc(x.medio.toLowerCase()||"—")}${x.dias.length?` · ${x.dias.length} días/sem`:""}</small></td>
+    <td><span class="cat ${x.abc_impT}">${x.cat}</span><br><small>gf ${x.abc_gfT}</small></td>
+    <td>${int(x.gfM)}<br><small>últ. ${int(x.gfUlt)}</small></td><td>${int(x.gfT)}</td>
+    <td>${money(x.impM)}<br><small>últ. ${money(x.impUlt)}</small></td><td>${money(x.impT)}</td>
+    <td>${x.precio!=null?money2(x.precio):"—"}<br><small>${x.factura?"factura · "+money2(x.precioNeto)+" s/IVA":""}</small></td>
+    <td class="${x.margenGf==null?"":cls(x.margenGf)}">${x.margenGf!=null?money2(x.margenGf):"—"}<br><small>${x.margenPct!=null?pct(x.margenPct):""}</small></td>
+    <td>${x.km!=null?x.km.toLocaleString("es-MX",{maximumFractionDigits:1})+" km":"—"}<br><small>${x.min!=null?x.min+" min":""}</small></td>
+    <td>${x.costoRutaMes!=null?money(x.costoRutaMes):"—"}<br><small>${x.rutaGf!=null?money2(x.rutaGf)+"/gf":""}</small></td>
+    <td class="${x.utilMes==null?"":cls(x.utilMes)}">${x.utilMes!=null?money(x.utilMes):"—"}</td></tr>`;
+
+  $("tab-cli").innerHTML = `
+    <div class="sec-head"><div class="per">Clientes · <b>${per}</b> · ${A.length} con compras</div>
+      <button class="btn ghost" id="cli-salir" type="button">Cerrar sesión</button></div>
+    <div class="hero"><h1>${aV.length} clientes A concentran <span class="amt pos">${pct(aShare)}</span> de las ventas.</h1>
+      <p>Clasificación ABC por ventas y por garrafones (${per}); XYZ según qué tan parejo compra cada cliente mes a mes. El margen resta el agua (${money2(R.agua)} por garrafón: pipa de ${money(K.pipaPrecio)} / ${int(K.pipaLitros)} L), sello y tapa (${money2(R.insumos)}) y la gasolina real repartida según los km que cada cliente agrega a la ruta.</p></div>
+
+    <section class="panel"><h2>Mapa de clientes</h2>
+      <p class="lead">Centro: ${esc(CLI.purificadora.nombre)} (cuadro negro). Tamaño = garrafones al mes; color = categoría por ventas: <span class="dotc" style="background:${CAT_COLOR.A}"></span>A <span class="dotc" style="background:${CAT_COLOR.B}"></span>B <span class="dotc" style="background:${CAT_COLOR.C}"></span>C. Da clic en un cliente para ver su consumo, ventas, categoría, distancia y costo.</p>
+      <div id="mapa" role="application" aria-label="Mapa de clientes"></div>
+      ${CLI.purificadora.lat==null?`<p class="note"><strong>No se ubicó la purificadora.</strong> Escribe su LAT y LNG en el renglón PURIFICADORA de la pestaña GEO CLIENTES y pon FUENTE = MANUAL.</p>`:""}
+    </section>
+
+    <div class="grid2" style="margin-top:24px">
+      <section class="panel" style="margin-top:0"><h2>Matriz ABC-XYZ</h2>
+        <p class="lead">Clientes y % de ventas en cada cuadro. ABC por ventas: A = 80% de las ventas, B = siguiente 15%, C = último 5%. XYZ por variación mensual de garrafones: X &lt; 25%, Y 25–50%, Z &gt; 50%.</p>
+        <table class="mx"><thead><tr><th></th>${xs.map(z=>`<th>${z} · ${z==="X"?"estable":z==="Y"?"variable":"irregular"}</th>`).join("")}</tr></thead><tbody>
+          ${cats.map(a=>`<tr><th>${a}</th>${xs.map(z=>{ const c=celda(a,z); return `<td class="${a==="A"&&c.n?"hi":""}" title="${a}${z}: ${desc[a+z]}"><b>${c.n}</b><small>${pct(c.imp/impTot)} de ventas</small></td>`; }).join("")}</tr>`).join("")}
+        </tbody></table>
+        <ul class="an">${cats.flatMap(a=>xs.map(z=>[a+z,celda(a,z).n])).filter(([,n])=>n).slice(0,9).map(([k,n])=>`<li><b>${k}</b> (${n}): ${desc[k]}.</li>`).join("")}</ul>
+      </section>
+      <section class="panel" style="margin-top:0"><h2>Margen y costo de ruta</h2>
+        <p class="lead">Por garrafón: precio (sin IVA si factura) − agua − sello y tapa − gasolina real asignada al cliente ÷ sus garrafones.</p>
+        <div class="kv">
+          <div><span>Agua</span><b>${money2(R.agua)}</b><small>por garrafón de ${K.litrosGarrafon} L</small></div>
+          <div><span>Sello y tapa</span><b>${money2(R.insumos)}</b><small>por garrafón</small></div>
+          <div><span>Gasolina real</span><b>${money(R.gasMes)}</b><small>al mes, promedio ${per}</small></div>
+          <div><span>Utilidad / mes</span><b>${money(utilTot)}</b><small>clientes con precio (antes de sueldos y renta)</small></div>
+        </div>
+        ${peor.length?`<ul class="an"><li>Menor margen: ${peor.map(x=>`${esc(nice(x.nombre))} (${pct(x.margenPct)})`).join(", ")}.</li></ul>`:""}
+        <p class="note"><strong>Cómo se reparte la gasolina:</strong> el gasto real de gasolina del mes (pestañas GASTOS) se divide entre los clientes según los km que agrega cada uno: visitas al mes (días de ruta en CLIENTES × ${K.semanasMes}) × ida y vuelta por calle. Clientes sin ubicación o sin días de ruta no reciben gasolina. En la ventana de cada cliente se ve también el costo de un viaje exclusivo como referencia (${K.kmPorLitro} km/L y ${money(K.precioGasolina)}/L, supuestos).</p>
+      </section>
+    </div>
+
+    <section class="panel"><h2>Clientes</h2><p class="lead">Ordenados por ventas ${per}. "Últ." = ${mesUlt}.</p>
+      <div class="tscroll"><table class="t cli"><thead><tr><th>Cliente</th><th>Categoría</th><th>Gf / mes</th><th>Gf 2026</th><th>Ventas / mes</th><th>Ventas 2026</th><th>Precio</th><th>Margen / gf</th><th>Distancia</th><th>Ruta / mes</th><th>Utilidad / mes</th></tr></thead><tbody>
+        ${A.slice().sort((a,b)=>b.impT-a.impT).map(fila).join("")}
+        <tr style="font-weight:600"><td>Total</td><td></td><td>${int(gfTot/R.ks.length)}</td><td>${int(gfTot)}</td><td>${money(impTot/R.ks.length)}</td><td>${money(impTot)}</td><td></td><td></td><td></td><td></td><td>${money(utilTot)}</td></tr>
+      </tbody></table></div>
+    </section>
+
+    <section class="panel"><h2>En revisión · fuera del mapa</h2>
+      <p class="lead">${revision.length} clientes sin domicilio o que no se pudieron ubicar. Cuando se complete su domicilio en CLIENTES aparecen solos en el mapa.</p>
+      ${revision.length?`<div class="tscroll"><table class="t"><thead><tr><th>Cliente</th><th>Motivo</th><th>Ventas 2026</th></tr></thead><tbody>
+        ${revision.sort((a,b)=>b.impT-a.impT).map(x=>`<tr><td>${esc(nice(x.nombre))}</td><td style="text-align:left">${x.geo==="SIN DOMICILIO"?"Sin domicilio":x.geo==="NO ENCONTRADO"?"Domicilio no encontrado en el mapa":x.geo==="PENDIENTE"?"Ubicación pendiente (se calcula en la próxima carga)":esc(x.geo)}</td><td>${money(x.impT)}</td></tr>`).join("")}
+      </tbody></table></div>`:`<p class="empty">Todos los clientes están en el mapa.</p>`}
+      ${R.lista.filter(x=>!x.gfT&&!x.impT).length?`<p class="lead" style="margin:12px 0 0">Sin compras en el periodo (no se clasifican): ${R.lista.filter(x=>!x.gfT&&!x.impT).map(x=>esc(nice(x.nombre))).join(", ")}.</p>`:""}
+    </section>`;
+  $("cli-salir").addEventListener("click",()=>{ CLI=null; try{ sessionStorage.removeItem("cliClave"); }catch(e){} if(MAPA){ MAPA.remove(); MAPA=null; } pedirClave(); });
+  dibujarMapa(R);
+}
+
+function abrirClientes(){
+  if(CLI){ renderClientes(); return; }
+  let k=null; try{ k=sessionStorage.getItem("cliClave"); }catch(e){}
+  if(k) cargarClientes(k); else pedirClave();
+}
+
+/* ===== Pestañas ===== */
+const TABS = {"2026":["t-2026","tab-2026",""], hist:["t-hist","tab-hist","#historico"], cli:["t-cli","tab-cli","#clientes"]};
+function showTab(t){
+  Object.entries(TABS).forEach(([k,[b,p]])=>{ const on=k===t; $(p).hidden=!on; $(b).setAttribute("aria-selected",on); $(b).tabIndex=on?0:-1; });
+  try{ history.replaceState(null,"",TABS[t][2]||location.pathname+location.search); }catch(e){}
+  if(t==="cli") abrirClientes();
+  if(t==="cli" && MAPA) setTimeout(()=>MAPA.invalidateSize(),50);
+}
+Object.entries(TABS).forEach(([k,[b]])=>$(b).addEventListener("click",()=>showTab(k)));
 document.querySelector(".tabs").addEventListener("keydown",e=>{
-  if(e.key==="ArrowRight"||e.key==="ArrowLeft"){ const h=$("t-hist").getAttribute("aria-selected")==="true"; showTab(h?"2026":"hist"); $(h?"t-2026":"t-hist").focus(); } });
+  if(e.key!=="ArrowRight"&&e.key!=="ArrowLeft") return;
+  const ks=Object.keys(TABS), i=ks.findIndex(k=>$(TABS[k][0]).getAttribute("aria-selected")==="true");
+  const n=ks[(i+(e.key==="ArrowRight"?1:ks.length-1))%ks.length]; showTab(n); $(TABS[n][0]).focus(); });
 document.querySelectorAll("nav a").forEach(a=>a.addEventListener("click",()=>showTab("2026")));
 renderHistorico();
 if(location.hash==="#historico") showTab("hist");
+if(location.hash==="#clientes") showTab("cli");
 
 /* ===== Carga ===== */
 function setStatus(){
@@ -780,7 +1007,7 @@ async function load(){
   }
   DATA=norm(d);
   if(DATA.empresa) $("brand").innerHTML = `${nice(DATA.empresa)}<small>Resultados del negocio ${DATA.anio}</small>`;
-  buildSelect(); renderResultados(); renderInventario(); renderActual(); renderHistorico(); setStatus();
+  buildSelect(); renderResultados(); renderInventario(); renderActual(); renderHistorico(); if(CLI && $("tab-cli").dataset.pend) renderClientes(); setStatus();
 }
 $("periodo").addEventListener("change",e=>{ SEL=e.target.value; renderResultados(); });
 load();
