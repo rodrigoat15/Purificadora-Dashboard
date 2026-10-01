@@ -57,6 +57,13 @@ nav a:hover{color:var(--ink)}
 .hd-der{display:flex;align-items:center;gap:8px}
 .btn-act{font:inherit;font-size:12px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:9999px;padding:5px 12px;cursor:pointer;box-shadow:var(--shadow-sm)}
 .btn-act:hover{filter:brightness(.93)} .btn-act:disabled{opacity:.6;cursor:wait}
+section.panel.lote{margin-top:16px;border-color:var(--accent)}
+.lote .acc{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.lote ul{margin:6px 0 0;padding-left:18px;font-size:13px;color:var(--muted)}
+.lote .err{color:#b42318} .lote .okk{color:#067647}
+.lote pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:8px 0 0}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:gira 1s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes gira{to{transform:rotate(360deg)}}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--ash)}
 .dot.live{background:var(--accent)} .dot.snap{background:var(--ash)}
 
@@ -183,9 +190,11 @@ footer{margin-top:40px;font-size:12px;color:var(--ash)}
     <nav aria-label="Secciones"><a href="#resultados">Resultados</a><a href="#inventario">Inventario</a><a href="#actual">Mes actual</a></nav>
     <div class="hd-der">
       <div class="status" id="status"><span class="dot"></span><span>Cargando…</span></div>
-      <button class="btn-act" id="actualizar" type="button" title="Vuelve a leer el Google Sheet (inventario, notas, resultados)">↻ Actualizar</button>
+      <button class="btn-act" id="actualizar" type="button" title="Lee las fotos nuevas de la libreta (desde la PC con el ayudante) y vuelve a leer el Google Sheet">↻ Actualizar</button>
     </div>
   </header>
+
+  <section class="panel lote" id="lote" hidden aria-live="polite"></section>
 
   <div class="tabs" role="tablist" aria-label="Periodo">
     <button role="tab" id="t-2026" aria-controls="tab-2026" aria-selected="true">2026</button>
@@ -248,6 +257,7 @@ const CONFIG = {
   SOURCE_URL: "https://script.google.com/macros/s/AKfycbzl5Pf71xww5yEWpWYpT6BcoKDaXhKh_N5KbpM59zlQbA5Si7BfAVsWsAkitYrW0GZDhw/exec",                  // URL /exec del Apps Script. Vacío = datos de respaldo
   KEY: "PURIARTYJAIM",     // misma clave que READ_TOKEN en Code.gs
   REFRESH_MIN: 5,
+  LOCAL_URL: "http://127.0.0.1:8765",   // ayudante de la PC (scripts/servidor_local.py) que procesa las fotos de la libreta
   DIAS_LABORALES: [1,2,3,4,5],     // lunes a viernes (0=domingo … 6=sábado)
   TOP_CLIENTES: 10,
   // Canales que no son un cliente con nombre (se muestran aparte)
@@ -1071,11 +1081,82 @@ async function load(forzar){
   buildSelect(); renderResultados(); renderInventario(); renderActual(); renderHistorico(); renderEspera(); if(CLI && $("tab-cli").dataset.pend) renderClientes(); setStatus();
 }
 $("periodo").addEventListener("change",e=>{ SEL=e.target.value; renderResultados(); });
-// Botón: vuelve a leer el Sheet sin la copia de 5 minutos del Apps Script (nocache=1).
+/* ===== Botón Actualizar =====
+   1) Si en esta PC corre el ayudante local (scripts/servidor_local.py), lee las fotos nuevas de la libreta con Claude,
+      muestra la tabla del lote y sube al Sheet SOLO cuando se presiona "Confirmar".
+   2) Siempre vuelve a leer el Sheet sin la copia de 5 minutos del Apps Script (nocache=1). */
+let LOTE_POLL=null;
+async function local(ruta, metodo="GET"){
+  const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(), metodo==="GET"?2500:15000);
+  try{ const r=await fetch(CONFIG.LOCAL_URL+ruta,{method:metodo,headers:{"X-Purificadora":"1"},signal:ctl.signal}); return await r.json(); }
+  finally{ clearTimeout(t); }
+}
+function pintarLote(l, aviso){
+  const box=$("lote");
+  if(!l && !aviso){ box.hidden=true; box.innerHTML=""; return; }
+  box.hidden=false;
+  if(!l){ box.innerHTML=`<h2>Fotos de la libreta</h2><p class="empty">${esc(aviso)}</p><div class="acc"><button class="btn ghost" data-l="ocultar">Cerrar</button></div>`; return; }
+  const otras=(l.otras||[]).length?`<ul>${l.otras.map(o=>`<li>${esc(o.foto)}: ${esc(o.estado)}${o.fecha?` (${esc(o.fecha)})`:""}${o.nota?` · ${esc(o.nota)}`:""}</li>`).join("")}</ul>`:"";
+  if(l.estado==="procesando"||l.estado==="subiendo"){
+    const min=l.estado==="procesando"?` Puede tardar 1–2 minutos por foto (${(l.fotos||[]).length}).`:"";
+    box.innerHTML=`<h2>Fotos de la libreta</h2><p class="lead"><span class="spin"></span>${esc(l.mensaje||"Trabajando…")}${min} Puedes seguir usando el dashboard.</p>`; return;
+  }
+  if(l.estado==="error"){
+    box.innerHTML=`<h2>Fotos de la libreta</h2><p class="lead err">No se pudieron leer: ${esc(l.mensaje)}</p>
+      <div class="acc"><button class="btn ghost" data-l="cerrar">Cerrar e intentar de nuevo después</button></div>`; return;
+  }
+  const filas=(l.dias||[]).map(d=>{ const r=d.resumen||{};
+    const gastos=(d.gastos||[]).map(g=>`${esc(g.descripcion||g.concepto)} ${money(g.importe)}`).join(", ")||"—";
+    const avisos=[...(d.errores||[]).map(x=>`<li class="err">✗ ${esc(x)}</li>`),...(d.avisos||[]).map(x=>`<li>${esc(x)}</li>`)].join("");
+    const res=(l.resultado||[]).find(x=>x.fecha===d.fecha);
+    const est=res?(res.ok?`<span class="okk">✓ Subido</span>`:`<span class="err">✗ No subido</span>`):(d.errores.length?`<span class="err">✗ Revisar</span>`:`<span class="okk">✓ Cuadra</span>`);
+    return `<tr><td><b>${esc(d.fecha)}</b>${d.no_laborado?" · No laborado":""}<br><small>${esc(d.foto||"")}</small>${avisos?`<ul>${avisos}</ul>`:""}
+      ${res?`<pre>${esc(res.lineas.join("\n"))}</pre>`:""}</td>
+      <td>${r.ventanilla_garrafones!=null?r.ventanilla_garrafones:"—"} gf<br>${money(r.ventanilla_importe)}</td><td>${r.ruta_garrafones!=null?r.ruta_garrafones:"—"} gf<br>${money(r.ruta_efectivo)}</td>
+      <td style="white-space:normal;max-width:220px">${gastos}</td><td>${r.caja_inicio!=null?money(r.caja_inicio):"—"} → ${r.caja_total!=null?money(r.caja_total):"—"}</td><td>${est}</td></tr>`; }).join("");
+  const tabla=filas?`<div class="tscroll"><table class="t"><thead><tr><th>Fecha · avisos</th><th>Ventanilla</th><th>Ruta</th><th>Gastos</th><th>Caja inicio → total</th><th>Estado</th></tr></thead><tbody>${filas}</tbody></table></div>`:"";
+  const malos=(l.dias||[]).filter(d=>d.errores.length).length, buenos=(l.dias||[]).length-malos;
+  let acc="";
+  if(l.estado==="listo") acc=`${buenos?`<button class="btn" data-l="confirmar">Confirmar y subir ${buenos} día(s) al Sheet</button>`:""}
+      <button class="btn ghost" data-l="descartar">Descartar lote</button>`;
+  else acc=`<button class="btn ghost" data-l="cerrar">Cerrar</button>`;
+  const extra=l.estado==="listo"&&malos?`<p class="lead err">${malos} día(s) con ✗ no se subirán: revísalos en la terminal con /procesar-fotos.</p>`:"";
+  const rest=l.restantes?`<p class="lead">Quedan ${l.restantes} foto(s) más: presiona Actualizar otra vez después de confirmar.</p>`:"";
+  box.innerHTML=`<h2>Fotos de la libreta</h2><p class="lead">${esc(l.mensaje||"")}</p>${tabla}${otras}${extra}${rest}
+    ${l.faltantes?`<pre>${esc(l.faltantes)}</pre>`:""}<div class="acc">${acc}</div>`;
+}
+async function seguirLote(){
+  clearTimeout(LOTE_POLL);
+  let s; try{ s=await local("/estado"); }catch(e){ return; }
+  const l=s.lote; pintarLote(l);
+  if(l && (l.estado==="procesando"||l.estado==="subiendo")) LOTE_POLL=setTimeout(seguirLote,4000);
+  else if(l && l.estado==="subido") load(true);
+}
+$("lote").addEventListener("click",async e=>{
+  const el=e.target.closest("[data-l]"); if(!el) return; const a=el.dataset.l;
+  if(a==="ocultar") return pintarLote(null);
+  e.target.disabled=true;
+  try{
+    if(a==="confirmar"){ await local("/confirmar","POST"); seguirLote(); }
+    if(a==="descartar"){ await local("/descartar","POST"); pintarLote(null,"Lote descartado. Las fotos se volverán a leer la próxima vez."); }
+    if(a==="cerrar"){ await local("/cerrar","POST"); pintarLote(null); }
+  }catch(err){ pintarLote(null,"El ayudante de la PC no responde."); }
+});
 $("actualizar").addEventListener("click",async e=>{
   const b=e.currentTarget; b.disabled=true; b.textContent="Actualizando…";
-  try{ await load(true); } finally { b.disabled=false; b.textContent="↻ Actualizar"; }
+  try{
+    let hayLocal=false;
+    if(CONFIG.LOCAL_URL){ try{ const r=await local("/procesar","POST"); hayLocal=true;
+      if(r.sin_fotos) pintarLote(null,"No hay fotos nuevas en la carpeta FOTOS VENTANILLA.");
+      else if(r.lote){ pintarLote(r.lote); seguirLote(); }
+      else if(r.error) pintarLote(null,r.error);
+    }catch(err){ /* sin ayudante (otra computadora o celular): solo se actualizan los datos */ } }
+    await load(true);
+    if(!hayLocal) $("status").title="Para leer fotos nuevas, presiona Actualizar desde la PC donde está la carpeta de fotos.";
+  } finally { b.disabled=false; b.textContent="↻ Actualizar"; }
 });
+// Al ayudante solo se le habla al presionar el botón (así el dashboard público no pide permisos de red local a nadie).
+// Si hay un lote en curso o esperando confirmación, el botón lo vuelve a mostrar.
 load();
 if(CONFIG.SOURCE_URL) setInterval(load, CONFIG.REFRESH_MIN*60*1000);
 </script>
