@@ -54,6 +54,9 @@ nav{display:flex;gap:0;font-size:14px}
 nav a{color:var(--muted);text-decoration:none;padding:4px 12px;border-radius:9999px}
 nav a:hover{color:var(--ink)}
 .status{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:9999px;padding:3px 10px;box-shadow:var(--shadow-sm)}
+.hd-der{display:flex;align-items:center;gap:8px}
+.btn-act{font:inherit;font-size:12px;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:9999px;padding:5px 12px;cursor:pointer;box-shadow:var(--shadow-sm)}
+.btn-act:hover{filter:brightness(.93)} .btn-act:disabled{opacity:.6;cursor:wait}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--ash)}
 .dot.live{background:var(--accent)} .dot.snap{background:var(--ash)}
 
@@ -178,7 +181,10 @@ footer{margin-top:40px;font-size:12px;color:var(--ash)}
   <header>
     <div class="brand" id="brand">Agua Inmaculada Chapultepec<small>Resultados del negocio</small></div>
     <nav aria-label="Secciones"><a href="#resultados">Resultados</a><a href="#inventario">Inventario</a><a href="#actual">Mes actual</a></nav>
-    <div class="status" id="status"><span class="dot"></span><span>Cargando…</span></div>
+    <div class="hd-der">
+      <div class="status" id="status"><span class="dot"></span><span>Cargando…</span></div>
+      <button class="btn-act" id="actualizar" type="button" title="Vuelve a leer el Google Sheet (inventario, notas, resultados)">↻ Actualizar</button>
+    </div>
   </header>
 
   <div class="tabs" role="tablist" aria-label="Periodo">
@@ -1054,10 +1060,10 @@ function setStatus(){
     : (CONFIG.SOURCE_URL ? "No se pudo leer el Sheet; se muestran los datos de respaldo. Revisa la URL y la clave del Apps Script." : "Conecta el Sheet pegando la URL del Apps Script en CONFIG.SOURCE_URL.");
 }
 
-async function load(){
+async function load(forzar){
   let d=SNAPSHOT; SOURCE="snap";
   if(CONFIG.SOURCE_URL){
-    try{ const r=await fetch(`${CONFIG.SOURCE_URL}?key=${encodeURIComponent(CONFIG.KEY)}&t=${Date.now()}`); const j=await r.json();
+    try{ const r=await fetch(`${CONFIG.SOURCE_URL}?key=${encodeURIComponent(CONFIG.KEY)}${forzar===true?"&nocache=1":""}&t=${Date.now()}`); const j=await r.json();
       if(j && !j.error && j.ingresos){ d=j; SOURCE="live"; } }catch(e){ console.warn("Sheet no disponible:",e); }
   }
   DATA=norm(d);
@@ -1065,6 +1071,11 @@ async function load(){
   buildSelect(); renderResultados(); renderInventario(); renderActual(); renderHistorico(); renderEspera(); if(CLI && $("tab-cli").dataset.pend) renderClientes(); setStatus();
 }
 $("periodo").addEventListener("change",e=>{ SEL=e.target.value; renderResultados(); });
+// Botón: vuelve a leer el Sheet sin la copia de 5 minutos del Apps Script (nocache=1).
+$("actualizar").addEventListener("click",async e=>{
+  const b=e.currentTarget; b.disabled=true; b.textContent="Actualizando…";
+  try{ await load(true); } finally { b.disabled=false; b.textContent="↻ Actualizar"; }
+});
 load();
 if(CONFIG.SOURCE_URL) setInterval(load, CONFIG.REFRESH_MIN*60*1000);
 </script>
